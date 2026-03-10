@@ -46,13 +46,18 @@ public class MysqlConnector implements SourceConnector {
 
     @Override
     public QueryExecutionResult execute(QueryExecutionRequest request) {
+
         RegisteredDataSource dataSource = dataSourceService.findById(request.entity().sourceId())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Datasource not found for sourceId: " + request.entity().sourceId()
                 ));
 
         String tableName = quoteQualifiedIdentifier(request.entity().objectName());
-        StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
+        String selectClause = buildSelectClause(request.fields());
+        StringBuilder sql = new StringBuilder("SELECT ")
+                .append(selectClause)
+                .append(" FROM ")
+                .append(tableName);
         List<Object> parameters = new ArrayList<>();
 
         appendWhereClause(sql, request.filters(), parameters);
@@ -73,6 +78,18 @@ public class MysqlConnector implements SourceConnector {
         } catch (SQLException ex) {
             throw new IllegalStateException("Failed to execute MySQL query for entity: " + request.entity().entityCode(), ex);
         }
+    }
+
+
+    private String buildSelectClause(List<String> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return "*";
+        }
+        List<String> safeFields = new ArrayList<>();
+        for (String field : fields) {
+            safeFields.add(quoteSimpleIdentifier(field));
+        }
+        return String.join(", ", safeFields);
     }
 
     private void appendWhereClause(StringBuilder sql, List<SearchFilterRequest> filters, List<Object> parameters) {
@@ -111,7 +128,6 @@ public class MysqlConnector implements SourceConnector {
             statement.setObject(i + 1, parameters.get(i));
         }
     }
-
 
     private List<Map<String, Object>> extractRows(ResultSet rs) throws SQLException {
         List<Map<String, Object>> rows = new ArrayList<>();

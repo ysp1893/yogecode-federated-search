@@ -9,6 +9,7 @@ public record SearchRequest(
         String keyword,
         @Valid List<SearchFilterRequest> filters,
         List<String> include,
+        List<String> fields,
         Integer page,
         Integer size
 ) {

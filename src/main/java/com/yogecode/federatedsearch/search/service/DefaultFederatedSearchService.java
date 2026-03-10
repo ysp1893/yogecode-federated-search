@@ -55,7 +55,7 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         int size = normalizeSize(request.size());
 
         QueryExecutionResult rootResult = connectorRegistry.get(rootSource.dbType())
-                .execute(new QueryExecutionRequest(plan.rootEntity(), request.filters(), page, size));
+                .execute(new QueryExecutionRequest(plan.rootEntity(), request.filters(), request.fields(), page, size));
 
         List<Map<String, Object>> results = new ArrayList<>();
         for (Map<String, Object> row : rootResult.rows()) {

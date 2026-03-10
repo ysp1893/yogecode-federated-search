@@ -42,6 +42,7 @@ public class SearchController {
                                                   "value": "yogesh"
                                                 }
                                               ],
+                                              "fields": ["custid", "username", "name"],
                                               "include": ["cdr", "tickets"],
                                               "page": 0,
                                               "size": 20

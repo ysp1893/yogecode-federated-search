@@ -8,6 +8,7 @@ import java.util.List;
 public record QueryExecutionRequest(
         EntityMetadataRecord entity,
         List<SearchFilterRequest> filters,
+        List<String> fields,
         int page,
         int size
 ) {

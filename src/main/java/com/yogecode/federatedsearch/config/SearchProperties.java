@@ -19,6 +19,14 @@ public class SearchProperties {
     @Min(100)
     private long sourceTimeoutMs = 3000;
 
+    @Min(1)
+    @Max(32)
+    private int relationExecutorThreads = 8;
+
+    @Min(10)
+    @Max(2000)
+    private int joinBatchSize = 500;
+
     public int getDefaultPageSize() {
         return defaultPageSize;
     }
@@ -41,6 +49,22 @@ public class SearchProperties {
 
     public void setSourceTimeoutMs(long sourceTimeoutMs) {
         this.sourceTimeoutMs = sourceTimeoutMs;
+    }
+
+    public int getRelationExecutorThreads() {
+        return relationExecutorThreads;
+    }
+
+    public void setRelationExecutorThreads(int relationExecutorThreads) {
+        this.relationExecutorThreads = relationExecutorThreads;
+    }
+
+    public int getJoinBatchSize() {
+        return joinBatchSize;
+    }
+
+    public void setJoinBatchSize(int joinBatchSize) {
+        this.joinBatchSize = joinBatchSize;
     }
 }
 

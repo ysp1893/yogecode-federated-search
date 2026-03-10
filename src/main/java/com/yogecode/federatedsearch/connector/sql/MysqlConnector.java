@@ -8,6 +8,7 @@ import com.yogecode.federatedsearch.connector.spi.QueryExecutionResult;
 import com.yogecode.federatedsearch.connector.spi.SourceConnector;
 import com.yogecode.federatedsearch.datasource.model.RegisteredDataSource;
 import com.yogecode.federatedsearch.datasource.service.DataSourceService;
+import com.yogecode.federatedsearch.metadata.model.EntityMetadataRecord;
 import com.yogecode.federatedsearch.security.CredentialCipher;
 import org.springframework.stereotype.Component;
 
@@ -46,13 +47,12 @@ public class MysqlConnector implements SourceConnector {
 
     @Override
     public QueryExecutionResult execute(QueryExecutionRequest request) {
-
         RegisteredDataSource dataSource = dataSourceService.findById(request.entity().sourceId())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Datasource not found for sourceId: " + request.entity().sourceId()
                 ));
 
-        String tableName = quoteQualifiedIdentifier(request.entity().objectName());
+        String tableName = buildQualifiedObjectName(request.entity());
         String selectClause = buildSelectClause(request.fields());
         StringBuilder sql = new StringBuilder("SELECT ")
                 .append(selectClause)
@@ -61,9 +61,7 @@ public class MysqlConnector implements SourceConnector {
         List<Object> parameters = new ArrayList<>();
 
         appendWhereClause(sql, request.filters(), parameters);
-        sql.append(" LIMIT ? OFFSET ?");
-        parameters.add(Math.max(request.size(), 1));
-        parameters.add(Math.max(request.page(), 0) * Math.max(request.size(), 1));
+        appendPagination(sql, parameters, request.page(), request.size());
 
         try (Connection connection = DriverManager.getConnection(
                 buildJdbcUrl(dataSource),
@@ -79,7 +77,6 @@ public class MysqlConnector implements SourceConnector {
             throw new IllegalStateException("Failed to execute MySQL query for entity: " + request.entity().entityCode(), ex);
         }
     }
-
 
     private String buildSelectClause(List<String> fields) {
         if (fields == null || fields.isEmpty()) {
@@ -123,6 +120,17 @@ public class MysqlConnector implements SourceConnector {
         sql.append(String.join(" AND ", predicates));
     }
 
+    private void appendPagination(StringBuilder sql, List<Object> parameters, Integer page, Integer size) {
+        if (size == null) {
+            return;
+        }
+        int safeSize = Math.max(size, 1);
+        int safePage = page == null ? 0 : Math.max(page, 0);
+        sql.append(" LIMIT ? OFFSET ?");
+        parameters.add(safeSize);
+        parameters.add(safePage * safeSize);
+    }
+
     private void bindParameters(PreparedStatement statement, List<Object> parameters) throws SQLException {
         for (int i = 0; i < parameters.size(); i++) {
             statement.setObject(i + 1, parameters.get(i));
@@ -161,6 +169,13 @@ public class MysqlConnector implements SourceConnector {
             return decrypted.substring("{noop}".length());
         }
         return decrypted;
+    }
+
+    private String buildQualifiedObjectName(EntityMetadataRecord entity) {
+        if (entity.objectSchema() == null || entity.objectSchema().isBlank()) {
+            return quoteQualifiedIdentifier(entity.objectName());
+        }
+        return quoteQualifiedIdentifier(entity.objectSchema()) + "." + quoteQualifiedIdentifier(entity.objectName());
     }
 
     private String quoteQualifiedIdentifier(String identifier) {

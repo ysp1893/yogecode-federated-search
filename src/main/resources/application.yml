@@ -3,6 +3,12 @@ spring:
     name: federated-search
   profiles:
     active: h2
+  data:
+    redis:
+      password: ${REDIS_PASSWORD:}
+      sentinel:
+        master: ${REDIS_SENTINEL_MASTER:mymaster}
+        nodes: ${REDIS_SENTINEL_NODES:192.168.24.31:26379}
 
 server:
   port: 8080
@@ -26,3 +32,8 @@ app:
     default-page-size: 20
     max-page-size: 100
     source-timeout-ms: 3000
+  cache:
+    preload-on-startup: true
+    key-prefix: federated-search
+    redis:
+      enabled: true

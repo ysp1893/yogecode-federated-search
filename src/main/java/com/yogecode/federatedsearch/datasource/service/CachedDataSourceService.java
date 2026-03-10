@@ -4,6 +4,7 @@ import com.yogecode.federatedsearch.api.datasource.ConnectionTestResponse;
 import com.yogecode.federatedsearch.api.datasource.CreateDataSourceRequest;
 import com.yogecode.federatedsearch.api.datasource.DataSourceDetailsResponse;
 import com.yogecode.federatedsearch.api.datasource.DataSourceResponse;
+import com.yogecode.federatedsearch.cache.service.FederatedCacheManager;
 import com.yogecode.federatedsearch.datasource.entity.DataSourceEntity;
 import com.yogecode.federatedsearch.datasource.model.RegisteredDataSource;
 import com.yogecode.federatedsearch.datasource.repository.DataSourceRepository;
@@ -12,9 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @Transactional
@@ -22,14 +21,16 @@ public class CachedDataSourceService implements DataSourceService {
 
     private final DataSourceRepository dataSourceRepository;
     private final CredentialCipher credentialCipher;
-    private final Map<Long, RegisteredDataSource> sourceCache = new ConcurrentHashMap<>();
+    private final FederatedCacheManager cacheManager;
 
     public CachedDataSourceService(
             DataSourceRepository dataSourceRepository,
-            CredentialCipher credentialCipher
+            CredentialCipher credentialCipher,
+            FederatedCacheManager cacheManager
     ) {
         this.dataSourceRepository = dataSourceRepository;
         this.credentialCipher = credentialCipher;
+        this.cacheManager = cacheManager;
     }
 
     @Override
@@ -47,7 +48,8 @@ public class CachedDataSourceService implements DataSourceService {
         entity.setActive(true);
 
         DataSourceEntity saved = dataSourceRepository.save(entity);
-        sourceCache.put(saved.getId(), toRegisteredDataSource(saved));
+        cacheManager.putDataSource(toRegisteredDataSource(saved));
+        cacheManager.clearSearchContexts();
         return new DataSourceResponse(saved.getId(), saved.getSourceCode(), saved.getSourceName(), saved.getDbType(), "CREATED");
     }
 
@@ -62,25 +64,17 @@ public class CachedDataSourceService implements DataSourceService {
     @Override
     @Transactional(readOnly = true)
     public Optional<RegisteredDataSource> findById(Long sourceId) {
-        RegisteredDataSource cached = sourceCache.get(sourceId);
-        if (cached != null) {
-            return Optional.of(cached);
-        }
-        return dataSourceRepository.findById(sourceId)
-                .map(this::toRegisteredDataSource)
-                .map(registered -> {
-                    sourceCache.put(sourceId, registered);
-                    return registered;
-                });
+        return cacheManager.getDataSource(sourceId, () -> dataSourceRepository.findById(sourceId).map(this::toRegisteredDataSource));
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<RegisteredDataSource> findAll() {
-        if (sourceCache.isEmpty()) {
-            dataSourceRepository.findAll().forEach(entity -> sourceCache.put(entity.getId(), toRegisteredDataSource(entity)));
-        }
-        return sourceCache.values().stream().toList();
+        List<RegisteredDataSource> records = dataSourceRepository.findAll().stream()
+                .map(this::toRegisteredDataSource)
+                .toList();
+        records.forEach(cacheManager::putDataSource);
+        return records;
     }
 
     @Override

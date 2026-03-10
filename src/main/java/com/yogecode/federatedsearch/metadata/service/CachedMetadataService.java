@@ -4,6 +4,7 @@ import com.yogecode.federatedsearch.api.metadata.CreateEntityRequest;
 import com.yogecode.federatedsearch.api.metadata.CreateFieldsRequest;
 import com.yogecode.federatedsearch.api.metadata.CreateKeywordRequest;
 import com.yogecode.federatedsearch.api.metadata.CreateRelationRequest;
+import com.yogecode.federatedsearch.cache.service.FederatedCacheManager;
 import com.yogecode.federatedsearch.datasource.entity.DataSourceEntity;
 import com.yogecode.federatedsearch.datasource.repository.DataSourceRepository;
 import com.yogecode.federatedsearch.metadata.entity.EntityMetadataEntity;
@@ -23,9 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @Transactional
@@ -36,24 +35,22 @@ public class CachedMetadataService implements MetadataService {
     private final RelationMetadataRepository relationMetadataRepository;
     private final KeywordMetadataRepository keywordMetadataRepository;
     private final DataSourceRepository dataSourceRepository;
-
-    private final Map<String, EntityMetadataRecord> entityCache = new ConcurrentHashMap<>();
-    private final Map<Long, EntityMetadataRecord> entityByIdCache = new ConcurrentHashMap<>();
-    private final Map<String, String> keywordCache = new ConcurrentHashMap<>();
-    private final Map<String, List<RelationMetadataRecord>> relationCache = new ConcurrentHashMap<>();
+    private final FederatedCacheManager cacheManager;
 
     public CachedMetadataService(
             EntityMetadataRepository entityMetadataRepository,
             FieldMetadataRepository fieldMetadataRepository,
             RelationMetadataRepository relationMetadataRepository,
             KeywordMetadataRepository keywordMetadataRepository,
-            DataSourceRepository dataSourceRepository
+            DataSourceRepository dataSourceRepository,
+            FederatedCacheManager cacheManager
     ) {
         this.entityMetadataRepository = entityMetadataRepository;
         this.fieldMetadataRepository = fieldMetadataRepository;
         this.relationMetadataRepository = relationMetadataRepository;
         this.keywordMetadataRepository = keywordMetadataRepository;
         this.dataSourceRepository = dataSourceRepository;
+        this.cacheManager = cacheManager;
     }
 
     @Override
@@ -74,8 +71,8 @@ public class CachedMetadataService implements MetadataService {
         entity.setActive(true);
 
         EntityMetadataRecord record = toEntityRecord(entityMetadataRepository.save(entity));
-        entityCache.put(record.entityCode(), record);
-        entityByIdCache.put(record.id(), record);
+        cacheManager.putEntity(record);
+        cacheManager.clearSearchContexts();
         return record;
     }
 
@@ -122,7 +119,8 @@ public class CachedMetadataService implements MetadataService {
         relation.setActive(true);
 
         RelationMetadataRecord record = toRelationRecord(relationMetadataRepository.save(relation));
-        relationCache.remove(request.fromEntityCode());
+        cacheManager.evictRelations(request.fromEntityCode());
+        cacheManager.evictSearchContext(request.fromEntityCode());
         return record;
     }
 
@@ -139,40 +137,20 @@ public class CachedMetadataService implements MetadataService {
         keyword.setActive(true);
 
         KeywordMetadataRecord record = toKeywordRecord(keywordMetadataRepository.save(keyword));
-        keywordCache.put(record.keyword(), record.entityCode());
+        cacheManager.putKeyword(record.keyword(), record.entityCode());
         return record;
     }
 
     @Override
     @Transactional(readOnly = true)
     public Optional<EntityMetadataRecord> findEntityByCode(String entityCode) {
-        EntityMetadataRecord cached = entityCache.get(entityCode);
-        if (cached != null) {
-            return Optional.of(cached);
-        }
-        return entityMetadataRepository.findByEntityCode(entityCode)
-                .map(this::toEntityRecord)
-                .map(record -> {
-                    entityCache.put(record.entityCode(), record);
-                    entityByIdCache.put(record.id(), record);
-                    return record;
-                });
+        return cacheManager.getEntityByCode(entityCode, () -> entityMetadataRepository.findByEntityCode(entityCode).map(this::toEntityRecord));
     }
 
     @Override
     @Transactional(readOnly = true)
     public Optional<EntityMetadataRecord> findEntityById(Long entityId) {
-        EntityMetadataRecord cached = entityByIdCache.get(entityId);
-        if (cached != null) {
-            return Optional.of(cached);
-        }
-        return entityMetadataRepository.findById(entityId)
-                .map(this::toEntityRecord)
-                .map(record -> {
-                    entityByIdCache.put(record.id(), record);
-                    entityCache.put(record.entityCode(), record);
-                    return record;
-                });
+        return cacheManager.getEntityById(entityId, () -> entityMetadataRepository.findById(entityId).map(this::toEntityRecord));
     }
 
     @Override
@@ -181,10 +159,7 @@ public class CachedMetadataService implements MetadataService {
         List<EntityMetadataRecord> records = entityMetadataRepository.findAll().stream()
                 .map(this::toEntityRecord)
                 .toList();
-        records.forEach(record -> {
-            entityCache.put(record.entityCode(), record);
-            entityByIdCache.put(record.id(), record);
-        });
+        records.forEach(cacheManager::putEntity);
         return records;
     }
 
@@ -203,30 +178,17 @@ public class CachedMetadataService implements MetadataService {
             return Optional.empty();
         }
         String normalizedKeyword = keyword.toLowerCase(Locale.ROOT);
-        String cachedEntityCode = keywordCache.get(normalizedKeyword);
-        if (cachedEntityCode != null) {
-            return Optional.of(cachedEntityCode);
-        }
-        return keywordMetadataRepository.findByKeyword(normalizedKeyword)
+        return cacheManager.getKeyword(normalizedKeyword, () -> keywordMetadataRepository.findByKeyword(normalizedKeyword)
                 .map(this::toKeywordRecord)
-                .map(record -> {
-                    keywordCache.put(record.keyword(), record.entityCode());
-                    return record.entityCode();
-                });
+                .map(KeywordMetadataRecord::entityCode));
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<RelationMetadataRecord> findRelationsFrom(String entityCode) {
-        List<RelationMetadataRecord> cached = relationCache.get(entityCode);
-        if (cached != null) {
-            return cached;
-        }
-        List<RelationMetadataRecord> relations = relationMetadataRepository.findByFromEntityEntityCode(entityCode).stream()
+        return cacheManager.getRelations(entityCode, () -> relationMetadataRepository.findByFromEntityEntityCode(entityCode).stream()
                 .map(this::toRelationRecord)
-                .toList();
-        relationCache.put(entityCode, relations);
-        return relations;
+                .toList());
     }
 
     @Override
@@ -238,7 +200,8 @@ public class CachedMetadataService implements MetadataService {
         relations.stream()
                 .map(RelationMetadataRecord::fromEntityCode)
                 .distinct()
-                .forEach(entityCode -> relationCache.remove(entityCode));
+                .forEach(entityCode -> cacheManager.putRelations(entityCode,
+                        relations.stream().filter(relation -> relation.fromEntityCode().equals(entityCode)).toList()));
         return relations;
     }
 
@@ -248,7 +211,7 @@ public class CachedMetadataService implements MetadataService {
         List<KeywordMetadataRecord> keywords = keywordMetadataRepository.findAll().stream()
                 .map(this::toKeywordRecord)
                 .toList();
-        keywords.forEach(keyword -> keywordCache.put(keyword.keyword(), keyword.entityCode()));
+        keywords.forEach(keyword -> cacheManager.putKeyword(keyword.keyword(), keyword.entityCode()));
         return keywords;
     }
 

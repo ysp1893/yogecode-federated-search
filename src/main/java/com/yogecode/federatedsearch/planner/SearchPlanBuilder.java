@@ -1,32 +1,34 @@
 package com.yogecode.federatedsearch.planner;
 
 import com.yogecode.federatedsearch.api.search.SearchRequest;
-import com.yogecode.federatedsearch.metadata.model.EntityMetadataRecord;
-import com.yogecode.federatedsearch.metadata.model.RelationMetadataRecord;
+import com.yogecode.federatedsearch.cache.model.SearchMetadataContext;
+import com.yogecode.federatedsearch.cache.service.SearchMetadataContextService;
 import com.yogecode.federatedsearch.metadata.service.MetadataService;
 import org.springframework.stereotype.Component;
-
-import java.util.List;
 
 @Component
 public class SearchPlanBuilder {
 
     private final MetadataService metadataService;
+    private final SearchMetadataContextService searchMetadataContextService;
 
-    public SearchPlanBuilder(MetadataService metadataService) {
+    public SearchPlanBuilder(
+            MetadataService metadataService,
+            SearchMetadataContextService searchMetadataContextService
+    ) {
         this.metadataService = metadataService;
+        this.searchMetadataContextService = searchMetadataContextService;
     }
 
     public SearchPlan build(SearchRequest request) {
         String rootEntityCode = resolveRootEntity(request);
-        EntityMetadataRecord rootEntity = metadataService.findEntityByCode(rootEntityCode)
-                .orElseThrow(() -> new IllegalArgumentException("Unknown root entity: " + rootEntityCode));
-
-        List<RelationMetadataRecord> relations = metadataService.findRelationsFrom(rootEntityCode).stream()
-                .filter(relation -> request.include() != null && request.include().contains(relation.toEntityCode()))
-                .toList();
-
-        return new SearchPlan(rootEntityCode, rootEntity, relations, request);
+        SearchMetadataContext context = searchMetadataContextService.getContext(rootEntityCode);
+        return new SearchPlan(
+                rootEntityCode,
+                context.rootEntity(),
+                context.includedRelations(request.include()),
+                request
+        );
     }
 
     private String resolveRootEntity(SearchRequest request) {
@@ -37,4 +39,3 @@ public class SearchPlanBuilder {
                 .orElseThrow(() -> new IllegalArgumentException("Either entity or a registered keyword is required"));
     }
 }
-

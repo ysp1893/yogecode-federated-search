@@ -50,6 +50,21 @@ public class SearchController {
                                             """
                             ),
                             @ExampleObject(
+                                    name = "Entity fields search",
+                                    value = """
+                                            {
+                                              "entity": "cdr",
+                                              "entityFields": {
+                                                "cdr": ["CDRID", "UserName", "AcctStatusType", "lastmodificationdate"],
+                                                "customer": ["aadhar"]
+                                              },
+                                              "include": ["customer"],
+                                              "page": 0,
+                                              "size": 20
+                                            }
+                                            """
+                            ),
+                            @ExampleObject(
                                     name = "Keyword-based search",
                                     value = """
                                             {

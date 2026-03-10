@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Component
@@ -61,6 +62,7 @@ public class MysqlConnector implements SourceConnector {
         List<Object> parameters = new ArrayList<>();
 
         appendWhereClause(sql, request.filters(), parameters);
+        appendOrderBy(sql, request.sortBy(), request.sortDirection());
         appendPagination(sql, parameters, request.page(), request.size());
 
         try (Connection connection = DriverManager.getConnection(
@@ -137,6 +139,28 @@ public class MysqlConnector implements SourceConnector {
         String placeholders = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
         predicates.add(field + (negative ? " NOT IN (" : " IN (") + placeholders + ")");
         parameters.addAll(values);
+    }
+
+    private void appendOrderBy(StringBuilder sql, String sortBy, String sortDirection) {
+        if (sortBy == null || sortBy.isBlank()) {
+            return;
+        }
+        String normalizedDirection = normalizeSortDirection(sortDirection);
+        sql.append(" ORDER BY ")
+                .append(quoteSimpleIdentifier(sortBy))
+                .append(" ")
+                .append(normalizedDirection);
+    }
+
+    private String normalizeSortDirection(String sortDirection) {
+        if (sortDirection == null || sortDirection.isBlank()) {
+            return "ASC";
+        }
+        String normalized = sortDirection.trim().toUpperCase(Locale.ROOT);
+        if (!normalized.equals("ASC") && !normalized.equals("DESC")) {
+            throw new IllegalArgumentException("Unsupported sortDirection: " + sortDirection);
+        }
+        return normalized;
     }
 
     private void appendPagination(StringBuilder sql, List<Object> parameters, Integer page, Integer size) {

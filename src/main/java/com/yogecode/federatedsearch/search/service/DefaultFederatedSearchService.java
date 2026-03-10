@@ -67,9 +67,11 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         List<SearchFilterRequest> relationFilters = relationFilters(request.filters(), plan.rootEntityCode());
         List<String> requestedRootFields = resolveRequestedFields(request, plan.rootEntityCode(), true);
         List<String> rootExecutionFields = ensureFieldPresent(requestedRootFields, relationSourceFields(plan.includedRelations(), relationFilters));
+        String rootSortBy = resolveRootSortBy(request, plan.rootEntity());
+        String rootSortDirection = resolveSortDirection(request.sortDirection());
 
         QueryExecutionResult rootResult = connectorRegistry.get(rootSource.dbType())
-                .execute(new QueryExecutionRequest(plan.rootEntity(), rootFilters, rootExecutionFields, page, size));
+                .execute(new QueryExecutionRequest(plan.rootEntity(), rootFilters, rootExecutionFields, rootSortBy, rootSortDirection, page, size));
 
         Map<String, RelatedEntityBundle> includedData = loadIncludedRelations(context, plan, request, rootResult.rows());
 
@@ -131,6 +133,8 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
                             targetEntity,
                             List.of(new SearchFilterRequest(relation.toField(), FilterOperator.IN, List.copyOf(joinValues))),
                             relatedExecutionFields,
+                            null,
+                            null,
                             null,
                             null
                     ));
@@ -324,6 +328,24 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
             }
         }
         return rootEntity ? request.fields() : null;
+    }
+
+    private String resolveRootSortBy(SearchRequest request, EntityMetadataRecord rootEntity) {
+        if (request.sortBy() != null && !request.sortBy().isBlank()) {
+            EntityScopedField scopedField = parseScopedField(request.sortBy(), rootEntity.entityCode());
+            if (scopedField.entityCode() != null && !scopedField.entityCode().equals(rootEntity.entityCode())) {
+                throw new IllegalArgumentException("Sorting is supported only on the root entity for now: " + request.sortBy());
+            }
+            return scopedField.fieldName();
+        }
+        return rootEntity.primaryKeyField();
+    }
+
+    private String resolveSortDirection(String sortDirection) {
+        if (sortDirection == null || sortDirection.isBlank()) {
+            return "ASC";
+        }
+        return sortDirection;
     }
 
     private List<String> relationSourceFields(List<RelationMetadataRecord> relations, List<SearchFilterRequest> relationFilters) {

@@ -9,6 +9,8 @@ public record QueryExecutionRequest(
         EntityMetadataRecord entity,
         List<SearchFilterRequest> filters,
         List<String> fields,
+        String sortBy,
+        String sortDirection,
         Integer page,
         Integer size
 ) {

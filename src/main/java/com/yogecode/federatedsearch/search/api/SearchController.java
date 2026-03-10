@@ -44,6 +44,8 @@ public class SearchController {
                                               ],
                                               "fields": ["custid", "username", "name"],
                                               "include": ["cdr", "tickets"],
+                                              "sortBy": "custid",
+                                              "sortDirection": "DESC",
                                               "page": 0,
                                               "size": 20
                                             }

@@ -12,6 +12,8 @@ public record SearchRequest(
         List<String> include,
         List<String> fields,
         Map<String, List<String>> entityFields,
+        String sortBy,
+        String sortDirection,
         Integer page,
         Integer size
 ) {

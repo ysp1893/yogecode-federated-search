@@ -1,0 +1,6 @@
+/target/
+/apache-maven-3.9.9/
+/.idea/
+/.vscode/
+*.iml
+.DS_Store

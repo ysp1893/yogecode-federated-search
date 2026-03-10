@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: federated-search
+  datasource:
+    url: jdbc:h2:mem:federated_search;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/federated-search
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+    tags-sorter: alpha
+
+app:
+  search:
+    default-page-size: 20
+    max-page-size: 100
+    source-timeout-ms: 3000

@@ -1,16 +1,43 @@
 package com.yogecode.federatedsearch.connector.sql;
 
+import com.yogecode.federatedsearch.api.search.SearchFilterRequest;
 import com.yogecode.federatedsearch.common.enums.DatabaseType;
+import com.yogecode.federatedsearch.common.enums.FilterOperator;
 import com.yogecode.federatedsearch.connector.spi.QueryExecutionRequest;
 import com.yogecode.federatedsearch.connector.spi.QueryExecutionResult;
 import com.yogecode.federatedsearch.connector.spi.SourceConnector;
+import com.yogecode.federatedsearch.datasource.model.RegisteredDataSource;
+import com.yogecode.federatedsearch.datasource.service.DataSourceService;
+import com.yogecode.federatedsearch.security.CredentialCipher;
 import org.springframework.stereotype.Component;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 @Component
 public class MysqlConnector implements SourceConnector {
+
+    private static final String IDENTIFIER_PATTERN = "[A-Za-z0-9_]+";
+
+    private final DataSourceService dataSourceService;
+    private final CredentialCipher credentialCipher;
+
+    public MysqlConnector(
+            DataSourceService dataSourceService,
+            CredentialCipher credentialCipher
+    ) {
+        this.dataSourceService = dataSourceService;
+        this.credentialCipher = credentialCipher;
+    }
 
     @Override
     public DatabaseType supports() {
@@ -19,11 +46,138 @@ public class MysqlConnector implements SourceConnector {
 
     @Override
     public QueryExecutionResult execute(QueryExecutionRequest request) {
-        return new QueryExecutionResult(request.entity().entityCode(), List.of(Map.of(
-                "sourceType", "MYSQL",
-                "objectName", request.entity().objectName(),
-                "message", "Query execution not implemented yet"
-        )));
+        RegisteredDataSource dataSource = dataSourceService.findById(request.entity().sourceId())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Datasource not found for sourceId: " + request.entity().sourceId()
+                ));
+
+        String tableName = quoteQualifiedIdentifier(request.entity().objectName());
+        StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
+        List<Object> parameters = new ArrayList<>();
+
+        appendWhereClause(sql, request.filters(), parameters);
+        sql.append(" LIMIT ? OFFSET ?");
+        parameters.add(Math.max(request.size(), 1));
+        parameters.add(Math.max(request.page(), 0) * Math.max(request.size(), 1));
+
+        try (Connection connection = DriverManager.getConnection(
+                buildJdbcUrl(dataSource),
+                dataSource.username(),
+                resolvePassword(dataSource.passwordRef())
+        ); PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+
+            bindParameters(statement, parameters);
+            try (ResultSet rs = statement.executeQuery()) {
+                return new QueryExecutionResult(request.entity().entityCode(), extractRows(rs));
+            }
+        } catch (SQLException ex) {
+            throw new IllegalStateException("Failed to execute MySQL query for entity: " + request.entity().entityCode(), ex);
+        }
+    }
+
+    private void appendWhereClause(StringBuilder sql, List<SearchFilterRequest> filters, List<Object> parameters) {
+        if (filters == null || filters.isEmpty()) {
+            return;
+        }
+
+        sql.append(" WHERE ");
+        List<String> predicates = new ArrayList<>();
+        for (SearchFilterRequest filter : filters) {
+            String field = quoteSimpleIdentifier(filter.field());
+            if (filter.operator() == FilterOperator.EQ) {
+                predicates.add(field + " = ?");
+                parameters.add(filter.value());
+            } else if (filter.operator() == FilterOperator.LIKE) {
+                predicates.add(field + " LIKE ?");
+                parameters.add(String.valueOf(filter.value()));
+            } else if (filter.operator() == FilterOperator.IN) {
+                List<Object> values = normalizeInValues(filter.value());
+                if (values.isEmpty()) {
+                    predicates.add("1 = 0");
+                } else {
+                    String placeholders = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
+                    predicates.add(field + " IN (" + placeholders + ")");
+                    parameters.addAll(values);
+                }
+            } else {
+                throw new IllegalArgumentException("Unsupported filter operator: " + filter.operator());
+            }
+        }
+        sql.append(String.join(" AND ", predicates));
+    }
+
+    private void bindParameters(PreparedStatement statement, List<Object> parameters) throws SQLException {
+        for (int i = 0; i < parameters.size(); i++) {
+            statement.setObject(i + 1, parameters.get(i));
+        }
+    }
+
+
+    private List<Map<String, Object>> extractRows(ResultSet rs) throws SQLException {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        ResultSetMetaData metaData = rs.getMetaData();
+        int columnCount = metaData.getColumnCount();
+
+        while (rs.next()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            for (int i = 1; i <= columnCount; i++) {
+                row.put(metaData.getColumnLabel(i), rs.getObject(i));
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private String buildJdbcUrl(RegisteredDataSource source) {
+        Object jdbcUrl = source.connectionParams() == null ? null : source.connectionParams().get("jdbcUrl");
+        if (jdbcUrl != null && !String.valueOf(jdbcUrl).isBlank()) {
+            return String.valueOf(jdbcUrl);
+        }
+        return "jdbc:mysql://" + source.host() + ":" + source.port() + "/" + source.databaseName();
+    }
+
+    private String resolvePassword(String passwordRef) {
+        if (passwordRef == null) {
+            return null;
+        }
+        String decrypted = credentialCipher.decrypt(passwordRef);
+        if (decrypted != null && decrypted.startsWith("{noop}")) {
+            return decrypted.substring("{noop}".length());
+        }
+        return decrypted;
+    }
+
+    private String quoteQualifiedIdentifier(String identifier) {
+        String[] parts = identifier.split("\\.");
+        List<String> safeParts = new ArrayList<>();
+        for (String part : parts) {
+            safeParts.add(quoteSimpleIdentifier(part));
+        }
+        return String.join(".", safeParts);
+    }
+
+    private String quoteSimpleIdentifier(String identifier) {
+        if (identifier == null || !identifier.matches(IDENTIFIER_PATTERN)) {
+            throw new IllegalArgumentException("Invalid SQL identifier: " + identifier);
+        }
+        return "`" + identifier + "`";
+    }
+
+    private List<Object> normalizeInValues(Object rawValue) {
+        if (rawValue == null) {
+            return List.of();
+        }
+        if (rawValue instanceof Collection<?> collection) {
+            return new ArrayList<>(collection);
+        }
+        if (rawValue.getClass().isArray()) {
+            int length = java.lang.reflect.Array.getLength(rawValue);
+            List<Object> values = new ArrayList<>(length);
+            for (int i = 0; i < length; i++) {
+                values.add(java.lang.reflect.Array.get(rawValue, i));
+            }
+            return values;
+        }
+        return List.of(rawValue);
     }
 }
-

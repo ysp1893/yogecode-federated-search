@@ -1,18 +1,8 @@
 spring:
   application:
     name: federated-search
-  datasource:
-    url: jdbc:h2:mem:federated_search;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  jpa:
-    hibernate:
-      ddl-auto: update
-    open-in-view: false
-  data:
-    mongodb:
-      uri: mongodb://localhost:27017/federated-search
+  profiles:
+    active: h2
 
 server:
   port: 8080

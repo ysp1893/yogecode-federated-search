@@ -1,0 +1,5 @@
+# Contains MongoDB specific configuration
+spring:
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/federated-search

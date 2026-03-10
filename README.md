@@ -1,2 +1,3 @@
-# yogecode-federated-search
-Metadata-driven Spring Boot federated search service for querying and aggregating data across MySQL, PostgreSQL, and MongoDB.
+# Yogecode Federated Search
+
+A metadata-driven Spring Boot service for federated search across multiple SQL and NoSQL data sources.

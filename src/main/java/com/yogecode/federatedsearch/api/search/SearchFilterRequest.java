@@ -7,7 +7,6 @@ import jakarta.validation.constraints.NotNull;
 public record SearchFilterRequest(
         @NotBlank String field,
         @NotNull FilterOperator operator,
-        @NotNull Object value
+        Object value
 ) {
 }
-

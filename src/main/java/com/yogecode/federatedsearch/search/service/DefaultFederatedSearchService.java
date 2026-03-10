@@ -21,11 +21,13 @@ import com.yogecode.federatedsearch.planner.SearchPlanBuilder;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -61,16 +63,21 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         RegisteredDataSource rootSource = context.rootSource();
         int page = request.page() == null ? 0 : Math.max(request.page(), 0);
         int size = normalizeSize(request.size());
+        List<SearchFilterRequest> rootFilters = rootFilters(request.filters(), plan.rootEntityCode());
+        List<SearchFilterRequest> relationFilters = relationFilters(request.filters(), plan.rootEntityCode());
         List<String> requestedRootFields = resolveRequestedFields(request, plan.rootEntityCode(), true);
-        List<String> rootExecutionFields = ensureFieldPresent(requestedRootFields, relationSourceFields(plan.includedRelations()));
+        List<String> rootExecutionFields = ensureFieldPresent(requestedRootFields, relationSourceFields(plan.includedRelations(), relationFilters));
 
         QueryExecutionResult rootResult = connectorRegistry.get(rootSource.dbType())
-                .execute(new QueryExecutionRequest(plan.rootEntity(), request.filters(), rootExecutionFields, page, size));
+                .execute(new QueryExecutionRequest(plan.rootEntity(), rootFilters, rootExecutionFields, page, size));
 
         Map<String, RelatedEntityBundle> includedData = loadIncludedRelations(context, plan, request, rootResult.rows());
 
         List<Map<String, Object>> results = new ArrayList<>();
         for (Map<String, Object> row : rootResult.rows()) {
+            if (!matchesRelationFilters(row, relationFilters, includedData)) {
+                continue;
+            }
             Map<String, Object> assembled = new LinkedHashMap<>();
             assembled.put(plan.rootEntityCode(), selectFields(row, requestedRootFields));
             attachIncludedRelations(assembled, row, plan.includedRelations(), includedData);
@@ -109,7 +116,7 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
             Set<Object> joinValues = collectJoinValues(rootRows, relation.fromField());
             List<String> requestedRelatedFields = resolveRequestedFields(request, targetEntity.entityCode(), false);
             if (joinValues.isEmpty()) {
-                bundles.put(relation.relationCode(), new RelatedEntityBundle(targetEntity, Map.of(), requestedRelatedFields));
+                bundles.put(relation.relationCode(), new RelatedEntityBundle(targetEntity, relation, Map.of(), requestedRelatedFields));
                 continue;
             }
 
@@ -132,12 +139,130 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
                     relation.relationCode(),
                     new RelatedEntityBundle(
                             targetEntity,
+                            relation,
                             groupRowsByField(relatedResult.rows(), relation.toField()),
                             requestedRelatedFields
                     )
             );
         }
         return bundles;
+    }
+
+    private List<SearchFilterRequest> rootFilters(List<SearchFilterRequest> filters, String rootEntityCode) {
+        if (filters == null || filters.isEmpty()) {
+            return List.of();
+        }
+        return filters.stream()
+                .filter(filter -> !isRelationFilter(filter, rootEntityCode))
+                .map(filter -> normalizeRootFilter(filter, rootEntityCode))
+                .toList();
+    }
+
+    private SearchFilterRequest normalizeRootFilter(SearchFilterRequest filter, String rootEntityCode) {
+        EntityScopedField scopedField = parseScopedField(filter.field(), rootEntityCode);
+        return new SearchFilterRequest(scopedField.fieldName(), filter.operator(), filter.value());
+    }
+
+    private List<SearchFilterRequest> relationFilters(List<SearchFilterRequest> filters, String rootEntityCode) {
+        if (filters == null || filters.isEmpty()) {
+            return List.of();
+        }
+        return filters.stream()
+                .filter(filter -> isRelationFilter(filter, rootEntityCode))
+                .toList();
+    }
+
+    private boolean isRelationFilter(SearchFilterRequest filter, String rootEntityCode) {
+        EntityScopedField scopedField = parseScopedField(filter.field(), rootEntityCode);
+        return scopedField.entityCode() != null && !scopedField.entityCode().equals(rootEntityCode);
+    }
+
+    private boolean matchesRelationFilters(
+            Map<String, Object> rootRow,
+            List<SearchFilterRequest> relationFilters,
+            Map<String, RelatedEntityBundle> includedData
+    ) {
+        for (SearchFilterRequest filter : relationFilters) {
+            if (!matchesRelationFilter(rootRow, filter, includedData)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean matchesRelationFilter(
+            Map<String, Object> rootRow,
+            SearchFilterRequest filter,
+            Map<String, RelatedEntityBundle> includedData
+    ) {
+        EntityScopedField scopedField = parseScopedField(filter.field(), null);
+        List<Map<String, Object>> relatedRows = relatedRowsFor(rootRow, scopedField.entityCode(), includedData);
+        if (filter.operator() == FilterOperator.IS_NULL) {
+            return relatedRows.isEmpty() || relatedRows.stream().anyMatch(row -> row.get(scopedField.fieldName()) == null);
+        }
+        if (filter.operator() == FilterOperator.IS_NOT_NULL) {
+            return relatedRows.stream().anyMatch(row -> row.get(scopedField.fieldName()) != null);
+        }
+        if (relatedRows.isEmpty()) {
+            return false;
+        }
+        return relatedRows.stream().anyMatch(row -> matchesFieldValue(row.get(scopedField.fieldName()), filter));
+    }
+
+    private List<Map<String, Object>> relatedRowsFor(
+            Map<String, Object> rootRow,
+            String entityCode,
+            Map<String, RelatedEntityBundle> includedData
+    ) {
+        for (RelatedEntityBundle bundle : includedData.values()) {
+            if (!bundle.entity().entityCode().equals(entityCode)) {
+                continue;
+            }
+            Object joinValue = rootRow.get(bundle.relation().fromField());
+            if (joinValue == null) {
+                return List.of();
+            }
+            return bundle.rowsByJoinValue().getOrDefault(joinValue, List.of());
+        }
+        return List.of();
+    }
+
+    private boolean matchesFieldValue(Object fieldValue, SearchFilterRequest filter) {
+        return switch (filter.operator()) {
+            case EQ -> Objects.equals(fieldValue, filter.value());
+            case NE -> !Objects.equals(fieldValue, filter.value());
+            case LIKE -> fieldValue != null && String.valueOf(fieldValue).contains(String.valueOf(filter.value()));
+            case IN -> normalizeValues(filter.value()).contains(fieldValue);
+            case NOT_IN -> !normalizeValues(filter.value()).contains(fieldValue);
+            case IS_NULL -> fieldValue == null;
+            case IS_NOT_NULL -> fieldValue != null;
+        };
+    }
+
+    private EntityScopedField parseScopedField(String rawField, String defaultEntityCode) {
+        if (rawField != null && rawField.contains(".")) {
+            String[] parts = rawField.split("\\.", 2);
+            return new EntityScopedField(parts[0], parts[1]);
+        }
+        return new EntityScopedField(defaultEntityCode, rawField);
+    }
+
+    private List<Object> normalizeValues(Object rawValue) {
+        if (rawValue == null) {
+            return List.of();
+        }
+        if (rawValue instanceof Collection<?> collection) {
+            return new ArrayList<>(collection);
+        }
+        if (rawValue.getClass().isArray()) {
+            int length = java.lang.reflect.Array.getLength(rawValue);
+            List<Object> values = new ArrayList<>(length);
+            for (int i = 0; i < length; i++) {
+                values.add(java.lang.reflect.Array.get(rawValue, i));
+            }
+            return values;
+        }
+        return List.of(rawValue);
     }
 
     private Set<Object> collectJoinValues(List<Map<String, Object>> rows, String fieldName) {
@@ -201,10 +326,20 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         return rootEntity ? request.fields() : null;
     }
 
-    private List<String> relationSourceFields(List<RelationMetadataRecord> relations) {
+    private List<String> relationSourceFields(List<RelationMetadataRecord> relations, List<SearchFilterRequest> relationFilters) {
         List<String> fields = new ArrayList<>();
         for (RelationMetadataRecord relation : relations) {
             fields.add(relation.fromField());
+        }
+        for (SearchFilterRequest relationFilter : relationFilters) {
+            EntityScopedField scopedField = parseScopedField(relationFilter.field(), null);
+            if (scopedField.entityCode() != null && scopedField.fieldName() != null) {
+                for (RelationMetadataRecord relation : relations) {
+                    if (relation.toEntityCode().equals(scopedField.entityCode()) && !fields.contains(relation.fromField())) {
+                        fields.add(relation.fromField());
+                    }
+                }
+            }
         }
         return fields;
     }
@@ -244,8 +379,15 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
 
     private record RelatedEntityBundle(
             EntityMetadataRecord entity,
+            RelationMetadataRecord relation,
             Map<Object, List<Map<String, Object>>> rowsByJoinValue,
             List<String> requestedFields
+    ) {
+    }
+
+    private record EntityScopedField(
+            String entityCode,
+            String fieldName
     ) {
     }
 }

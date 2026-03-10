@@ -65,6 +65,27 @@ public class SearchController {
                                             """
                             ),
                             @ExampleObject(
+                                    name = "Relation null filter",
+                                    value = """
+                                            {
+                                              "entity": "customer",
+                                              "filters": [
+                                                {
+                                                  "field": "cdr.CDRID",
+                                                  "operator": "IS_NULL"
+                                                }
+                                              ],
+                                              "entityFields": {
+                                                "customer": ["username", "cstatus"],
+                                                "cdr": ["CDRID"]
+                                              },
+                                              "include": ["cdr"],
+                                              "page": 0,
+                                              "size": 20
+                                            }
+                                            """
+                            ),
+                            @ExampleObject(
                                     name = "Keyword-based search",
                                     value = """
                                             {

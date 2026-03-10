@@ -101,23 +101,42 @@ public class MysqlConnector implements SourceConnector {
             if (filter.operator() == FilterOperator.EQ) {
                 predicates.add(field + " = ?");
                 parameters.add(filter.value());
+            } else if (filter.operator() == FilterOperator.NE) {
+                predicates.add(field + " <> ?");
+                parameters.add(filter.value());
             } else if (filter.operator() == FilterOperator.LIKE) {
                 predicates.add(field + " LIKE ?");
                 parameters.add(String.valueOf(filter.value()));
             } else if (filter.operator() == FilterOperator.IN) {
-                List<Object> values = normalizeInValues(filter.value());
-                if (values.isEmpty()) {
-                    predicates.add("1 = 0");
-                } else {
-                    String placeholders = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
-                    predicates.add(field + " IN (" + placeholders + ")");
-                    parameters.addAll(values);
-                }
+                appendCollectionPredicate(predicates, parameters, field, filter.value(), false);
+            } else if (filter.operator() == FilterOperator.NOT_IN) {
+                appendCollectionPredicate(predicates, parameters, field, filter.value(), true);
+            } else if (filter.operator() == FilterOperator.IS_NULL) {
+                predicates.add(field + " IS NULL");
+            } else if (filter.operator() == FilterOperator.IS_NOT_NULL) {
+                predicates.add(field + " IS NOT NULL");
             } else {
                 throw new IllegalArgumentException("Unsupported filter operator: " + filter.operator());
             }
         }
         sql.append(String.join(" AND ", predicates));
+    }
+
+    private void appendCollectionPredicate(
+            List<String> predicates,
+            List<Object> parameters,
+            String field,
+            Object rawValue,
+            boolean negative
+    ) {
+        List<Object> values = normalizeInValues(rawValue);
+        if (values.isEmpty()) {
+            predicates.add(negative ? "1 = 1" : "1 = 0");
+            return;
+        }
+        String placeholders = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
+        predicates.add(field + (negative ? " NOT IN (" : " IN (") + placeholders + ")");
+        parameters.addAll(values);
     }
 
     private void appendPagination(StringBuilder sql, List<Object> parameters, Integer page, Integer size) {

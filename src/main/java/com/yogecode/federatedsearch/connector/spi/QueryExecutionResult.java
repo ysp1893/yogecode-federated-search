@@ -5,7 +5,8 @@ import java.util.Map;
 
 public record QueryExecutionResult(
         String entityCode,
-        List<Map<String, Object>> rows
+        List<Map<String, Object>> rows,
+        long total
 ) {
 }
 

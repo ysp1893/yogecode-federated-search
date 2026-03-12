@@ -35,6 +35,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.math.BigDecimal;
+import java.util.regex.Pattern;
 
 @Service
 public class DefaultFederatedSearchService implements FederatedSearchService {
@@ -74,6 +75,7 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         List<SearchFilterRequest> rootFilters = rootFilters(request.filters(), plan.rootEntityCode());
         List<SearchFilterRequest> relationFilters = relationFilters(request.filters(), plan.rootEntityCode());
         validateRelationFiltersIncluded(plan, relationFilters);
+        validateRelationFiltersUnambiguous(plan, relationFilters);
 
         List<String> requestedRootFields = resolveRequestedFields(request, plan.rootEntityCode(), true);
         List<String> rootExecutionFields = ensureFieldPresent(
@@ -84,7 +86,7 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         String rootSortBy = resolveRootSortBy(request, plan.rootEntity());
         String rootSortDirection = resolveSortDirection(request.sortDirection());
 
-        List<Map<String, Object>> results = relationFilters.isEmpty()
+        SearchExecutionOutcome outcome = relationFilters.isEmpty()
                 ? searchWithoutRelationPaging(context, plan, request, rootFilters, relationFilters,
                 requestedRootFields, rootExecutionFields, rootSortBy, rootSortDirection, page, size)
                 : searchWithRelationPaging(context, plan, request, rootFilters, relationFilters,
@@ -95,8 +97,8 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
                 plan.rootEntityCode(),
                 page,
                 size,
-                results.size(),
-                results,
+                outcome.total(),
+                outcome.results(),
                 List.<PartialFailureResponse>of()
         );
 
@@ -110,7 +112,7 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         relationExecutor.shutdown();
     }
 
-    private List<Map<String, Object>> searchWithoutRelationPaging(
+    private SearchExecutionOutcome searchWithoutRelationPaging(
             SearchMetadataContext context,
             SearchPlan plan,
             SearchRequest request,
@@ -135,10 +137,13 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         );
 
         Map<String, RelatedEntityBundle> includedData = loadIncludedRelations(context, plan, request, rootResult.rows());
-        return assembleResults(plan, requestedRootFields, relationFilters, rootResult.rows(), includedData);
+        return new SearchExecutionOutcome(
+                assembleResults(plan, requestedRootFields, relationFilters, rootResult.rows(), includedData),
+                rootResult.total()
+        );
     }
 
-    private List<Map<String, Object>> searchWithRelationPaging(
+    private SearchExecutionOutcome searchWithRelationPaging(
             SearchMetadataContext context,
             SearchPlan plan,
             SearchRequest request,
@@ -152,12 +157,12 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
             int size
     ) {
         List<Map<String, Object>> pagedResults = new ArrayList<>();
-        int matchedRows = 0;
+        long matchedRows = 0;
         int skippedMatches = page * size;
         int sourcePage = 0;
         int batchSize = Math.max(size, searchProperties.getDefaultPageSize());
 
-        while (pagedResults.size() < size) {
+        while (true) {
             QueryExecutionResult rootBatch = executeRootQuery(
                     context.rootSource(),
                     plan.rootEntity(),
@@ -184,9 +189,8 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
                     continue;
                 }
 
-                pagedResults.add(assembleResult(plan, requestedRootFields, row, includedData));
-                if (pagedResults.size() == size) {
-                    break;
+                if (pagedResults.size() < size) {
+                    pagedResults.add(assembleResult(plan, requestedRootFields, row, includedData));
                 }
             }
 
@@ -197,7 +201,7 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
             sourcePage++;
         }
 
-        return pagedResults;
+        return new SearchExecutionOutcome(pagedResults, matchedRows);
     }
 
     private QueryExecutionResult executeRootQuery(
@@ -307,7 +311,11 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
 
     private SearchFilterRequest normalizeRootFilter(SearchFilterRequest filter, String rootEntityCode) {
         EntityScopedField scopedField = parseScopedField(filter.field(), rootEntityCode);
-        return new SearchFilterRequest(scopedField.fieldName(), filter.operator(), filter.value());
+        return new SearchFilterRequest(
+                scopedField.fieldName(),
+                filter.operator(),
+                normalizeFilterValue(filter.operator(), filter.value())
+        );
     }
 
     private List<SearchFilterRequest> relationFilters(List<SearchFilterRequest> filters, String rootEntityCode) {
@@ -316,6 +324,11 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         }
         return filters.stream()
                 .filter(filter -> isRelationFilter(filter, rootEntityCode))
+                .map(filter -> new SearchFilterRequest(
+                        filter.field(),
+                        filter.operator(),
+                        normalizeFilterValue(filter.operator(), filter.value())
+                ))
                 .toList();
     }
 
@@ -385,7 +398,7 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
             case GTE -> compareValues(fieldValue, filter.value()) >= 0;
             case LT -> compareValues(fieldValue, filter.value()) < 0;
             case LTE -> compareValues(fieldValue, filter.value()) <= 0;
-            case LIKE -> fieldValue != null && String.valueOf(fieldValue).contains(String.valueOf(filter.value()));
+            case LIKE -> fieldValue != null && likePatternMatches(fieldValue, filter.value());
             case IN -> normalizeValues(filter.value()).contains(fieldValue);
             case NOT_IN -> !normalizeValues(filter.value()).contains(fieldValue);
             case IS_NULL -> fieldValue == null;
@@ -408,6 +421,38 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         String leftValue = String.valueOf(left);
         String rightValue = String.valueOf(right);
         return leftValue.compareTo(rightValue);
+    }
+
+    private boolean likePatternMatches(Object fieldValue, Object rawPattern) {
+        if (rawPattern == null) {
+            return false;
+        }
+        String pattern = String.valueOf(rawPattern);
+        StringBuilder regex = new StringBuilder("^");
+        for (int i = 0; i < pattern.length(); i++) {
+            char ch = pattern.charAt(i);
+            if (ch == '%') {
+                regex.append(".*");
+            } else if (ch == '_') {
+                regex.append('.');
+            } else {
+                regex.append(Pattern.quote(String.valueOf(ch)));
+            }
+        }
+        regex.append('$');
+        return Pattern.compile(regex.toString(), Pattern.DOTALL)
+                .matcher(String.valueOf(fieldValue))
+                .matches();
+    }
+
+    private Object normalizeFilterValue(FilterOperator operator, Object value) {
+        if (operator != FilterOperator.LIKE || !(value instanceof String stringValue)) {
+            return value;
+        }
+        if (stringValue.contains("%") || stringValue.contains("_")) {
+            return stringValue;
+        }
+        return "%" + stringValue + "%";
     }
 
     private EntityScopedField parseScopedField(String rawField, String defaultEntityCode) {
@@ -630,6 +675,24 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
         }
     }
 
+    private void validateRelationFiltersUnambiguous(SearchPlan plan, List<SearchFilterRequest> relationFilters) {
+        for (SearchFilterRequest relationFilter : relationFilters) {
+            EntityScopedField scopedField = parseScopedField(relationFilter.field(), null);
+            if (scopedField.entityCode() == null) {
+                continue;
+            }
+            long matchingRelations = plan.includedRelations().stream()
+                    .filter(relation -> relation.toEntityCode().equals(scopedField.entityCode()))
+                    .count();
+            if (matchingRelations > 1) {
+                throw new IllegalArgumentException(
+                        "Relation filter is ambiguous for entity '"
+                                + scopedField.entityCode()
+                                + "'. Multiple included relations target that entity.");
+            }
+        }
+    }
+
     private List<Map<String, Object>> assembleResults(
             SearchPlan plan,
             List<String> requestedRootFields,
@@ -664,6 +727,12 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
             RelationMetadataRecord relation,
             Map<Object, List<Map<String, Object>>> rowsByJoinValue,
             List<String> requestedFields
+    ) {
+    }
+
+    private record SearchExecutionOutcome(
+            List<Map<String, Object>> results,
+            long total
     ) {
     }
 

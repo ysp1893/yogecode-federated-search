@@ -100,11 +100,11 @@ public class CacheAdminService {
             return response(CacheScope.ENTITY, null, "Reloaded all entity cache entries.");
         }
         cacheManager.evictEntityByCode(key);
-        cacheManager.evictSearchContext(key);
+        cacheManager.clearSearchContexts();
         metadataService.findEntityByCode(key)
                 .orElseThrow(() -> new IllegalArgumentException("Entity not found: " + key));
-        searchMetadataContextService.preloadContext(key);
-        return response(CacheScope.ENTITY, key, "Reloaded entity cache entry.");
+        searchMetadataContextService.preloadAllContexts();
+        return response(CacheScope.ENTITY, key, "Reloaded entity cache entry and dependent search contexts.");
     }
 
     private CacheRefreshResponse refreshRelation(String key) {

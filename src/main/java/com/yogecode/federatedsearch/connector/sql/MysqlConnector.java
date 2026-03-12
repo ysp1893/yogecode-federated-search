@@ -8,6 +8,7 @@ import com.yogecode.federatedsearch.connector.spi.QueryExecutionResult;
 import com.yogecode.federatedsearch.connector.spi.SourceConnector;
 import com.yogecode.federatedsearch.datasource.model.RegisteredDataSource;
 import com.yogecode.federatedsearch.datasource.service.DataSourceService;
+import com.yogecode.federatedsearch.config.SearchProperties;
 import com.yogecode.federatedsearch.metadata.model.EntityMetadataRecord;
 import com.yogecode.federatedsearch.security.CredentialCipher;
 import org.springframework.stereotype.Component;
@@ -25,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 
 @Component
 public class MysqlConnector implements SourceConnector {
@@ -33,13 +35,16 @@ public class MysqlConnector implements SourceConnector {
 
     private final DataSourceService dataSourceService;
     private final CredentialCipher credentialCipher;
+    private final SearchProperties searchProperties;
 
     public MysqlConnector(
             DataSourceService dataSourceService,
-            CredentialCipher credentialCipher
+            CredentialCipher credentialCipher,
+            SearchProperties searchProperties
     ) {
         this.dataSourceService = dataSourceService;
         this.credentialCipher = credentialCipher;
+        this.searchProperties = searchProperties;
     }
 
     @Override
@@ -55,26 +60,33 @@ public class MysqlConnector implements SourceConnector {
                 ));
 
         String tableName = buildQualifiedObjectName(request.entity());
-        String selectClause = buildSelectClause(request.fields());
-        StringBuilder sql = new StringBuilder("SELECT ")
-                .append(selectClause)
-                .append(" FROM ")
-                .append(tableName);
-        List<Object> parameters = new ArrayList<>();
+        StringBuilder fromClause = new StringBuilder(" FROM ").append(tableName);
+        List<Object> whereParameters = new ArrayList<>();
+        appendWhereClause(fromClause, request.filters(), whereParameters);
 
-        appendWhereClause(sql, request.filters(), parameters);
-        appendOrderBy(sql, request.sortBy(), request.sortDirection());
-        appendPagination(sql, parameters, request.page(), request.size());
+        StringBuilder querySql = new StringBuilder("SELECT ")
+                .append(buildSelectClause(request.fields()))
+                .append(fromClause);
+        List<Object> queryParameters = new ArrayList<>(whereParameters);
+        appendOrderBy(querySql, request.sortBy(), request.sortDirection());
+        appendPagination(querySql, queryParameters, request.page(), request.size());
+
+        String countSql = "SELECT COUNT(*)" + fromClause;
 
         try (Connection connection = DriverManager.getConnection(
                 buildJdbcUrl(dataSource),
-                dataSource.username(),
-                resolvePassword(dataSource.passwordRef())
-        ); PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+                buildConnectionProperties(dataSource)
+        ); PreparedStatement countStatement = connection.prepareStatement(countSql);
+             PreparedStatement statement = connection.prepareStatement(querySql.toString())) {
 
-            bindParameters(statement, parameters);
+            countStatement.setQueryTimeout(queryTimeoutSeconds());
+            bindParameters(countStatement, whereParameters);
+            long total = extractCount(countStatement);
+
+            statement.setQueryTimeout(queryTimeoutSeconds());
+            bindParameters(statement, queryParameters);
             try (ResultSet rs = statement.executeQuery()) {
-                return new QueryExecutionResult(request.entity().entityCode(), extractRows(rs));
+                return new QueryExecutionResult(request.entity().entityCode(), extractRows(rs), total);
             }
         } catch (SQLSyntaxErrorException ex) {
             throw new IllegalArgumentException(buildInvalidQueryMessage(request.entity(), ex), ex);
@@ -221,6 +233,15 @@ public class MysqlConnector implements SourceConnector {
         return rows;
     }
 
+    private long extractCount(PreparedStatement statement) throws SQLException {
+        try (ResultSet rs = statement.executeQuery()) {
+            if (!rs.next()) {
+                return 0L;
+            }
+            return rs.getLong(1);
+        }
+    }
+
     private String buildJdbcUrl(RegisteredDataSource source) {
         Object jdbcUrl = source.connectionParams() == null ? null : source.connectionParams().get("jdbcUrl");
         if (jdbcUrl != null && !String.valueOf(jdbcUrl).isBlank()) {
@@ -238,6 +259,30 @@ public class MysqlConnector implements SourceConnector {
             return decrypted.substring("{noop}".length());
         }
         return decrypted;
+    }
+
+    private Properties buildConnectionProperties(RegisteredDataSource source) {
+        Properties properties = new Properties();
+        properties.setProperty("user", source.username());
+        String password = resolvePassword(source.passwordRef());
+        if (password != null) {
+            properties.setProperty("password", password);
+        }
+        properties.setProperty("connectTimeout", String.valueOf(searchProperties.getSourceTimeoutMs()));
+        properties.setProperty("socketTimeout", String.valueOf(searchProperties.getSourceTimeoutMs()));
+        if (source.connectionParams() != null) {
+            for (Map.Entry<String, Object> entry : source.connectionParams().entrySet()) {
+                if ("jdbcUrl".equals(entry.getKey()) || entry.getValue() == null) {
+                    continue;
+                }
+                properties.setProperty(entry.getKey(), String.valueOf(entry.getValue()));
+            }
+        }
+        return properties;
+    }
+
+    private int queryTimeoutSeconds() {
+        return Math.max(1, (int) Math.ceil(searchProperties.getSourceTimeoutMs() / 1000.0d));
     }
 
     private String buildQualifiedObjectName(EntityMetadataRecord entity) {

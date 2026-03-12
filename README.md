@@ -29,7 +29,7 @@ Current focus:
 - Dynamic datasource registration API
 - Metadata registration APIs for entities, fields, relations, and keywords
 - Metadata inspection APIs for datasources, entities, fields, relations, and keywords
-- MySQL connector with `EQ`, `NE`, `LIKE`, `IN`, `NOT_IN`, `IS_NULL`, `IS_NOT_NULL`
+- MySQL connector with `EQ`, `NE`, `GT`, `GTE`, `LT`, `LTE`, `LIKE`, `IN`, `NOT_IN`, `IS_NULL`, `IS_NOT_NULL`
 - Relation expansion for included entities
 - Per-entity field selection in search requests
 - Relation-aware filters like `customer.status` or `cdr.CDRID`
@@ -296,6 +296,10 @@ Current operators:
 
 - `EQ`
 - `NE`
+- `GT`
+- `GTE`
+- `LT`
+- `LTE`
 - `LIKE`
 - `IN`
 - `NOT_IN`
@@ -329,6 +333,26 @@ Current operators:
   "field": "UserName",
   "operator": "LIKE",
   "value": "%kumar%"
+}
+```
+
+### `GTE`
+
+```json
+{
+  "field": "createdAt",
+  "operator": "GTE",
+  "value": "2026-03-12T11:15:00"
+}
+```
+
+### `LTE`
+
+```json
+{
+  "field": "createdAt",
+  "operator": "LTE",
+  "value": "2026-03-12T11:30:00"
 }
 ```
 
@@ -408,6 +432,37 @@ Important:
 - relation filters are also combined with `AND`
 - `ORDER BY` is not supported yet
 - nested relation traversal is not supported yet
+
+## GUI Date Range Suggestion
+
+GUI can continue using the same search API and map date controls into `filters`.
+
+Example for "last 15 minutes":
+
+```json
+{
+  "entity": "cdr",
+  "filters": [
+    {
+      "field": "createdAt",
+      "operator": "GTE",
+      "value": "2026-03-12T11:15:00"
+    },
+    {
+      "field": "createdAt",
+      "operator": "LTE",
+      "value": "2026-03-12T11:30:00"
+    },
+    {
+      "field": "username",
+      "operator": "EQ",
+      "value": "yogesh"
+    }
+  ],
+  "page": 0,
+  "size": 20
+}
+```
 
 ## Cache Refresh APIs
 

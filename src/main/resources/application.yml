@@ -39,3 +39,5 @@ app:
     key-prefix: federated-search
     redis:
       enabled: true
+  security:
+    credential-secret: ${FEDERATED_SEARCH_CREDENTIAL_SECRET:change-me-federated-search-secret}

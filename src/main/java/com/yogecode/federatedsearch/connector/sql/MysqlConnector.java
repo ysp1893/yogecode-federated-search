@@ -18,6 +18,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -75,9 +76,22 @@ public class MysqlConnector implements SourceConnector {
             try (ResultSet rs = statement.executeQuery()) {
                 return new QueryExecutionResult(request.entity().entityCode(), extractRows(rs));
             }
+        } catch (SQLSyntaxErrorException ex) {
+            throw new IllegalArgumentException(buildInvalidQueryMessage(request.entity(), ex), ex);
         } catch (SQLException ex) {
             throw new IllegalStateException("Failed to execute MySQL query for entity: " + request.entity().entityCode(), ex);
         }
+    }
+
+    private String buildInvalidQueryMessage(EntityMetadataRecord entity, SQLSyntaxErrorException exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) {
+            return "Invalid query for entity: " + entity.entityCode();
+        }
+        if (message.contains("Unknown column")) {
+            return "Invalid filter or sort field for entity '" + entity.entityCode() + "': " + message;
+        }
+        return "Invalid query for entity '" + entity.entityCode() + "': " + message;
     }
 
     private String buildSelectClause(List<String> fields) {
@@ -105,6 +119,18 @@ public class MysqlConnector implements SourceConnector {
                 parameters.add(filter.value());
             } else if (filter.operator() == FilterOperator.NE) {
                 predicates.add(field + " <> ?");
+                parameters.add(filter.value());
+            } else if (filter.operator() == FilterOperator.GT) {
+                predicates.add(field + " > ?");
+                parameters.add(filter.value());
+            } else if (filter.operator() == FilterOperator.GTE) {
+                predicates.add(field + " >= ?");
+                parameters.add(filter.value());
+            } else if (filter.operator() == FilterOperator.LT) {
+                predicates.add(field + " < ?");
+                parameters.add(filter.value());
+            } else if (filter.operator() == FilterOperator.LTE) {
+                predicates.add(field + " <= ?");
                 parameters.add(filter.value());
             } else if (filter.operator() == FilterOperator.LIKE) {
                 predicates.add(field + " LIKE ?");

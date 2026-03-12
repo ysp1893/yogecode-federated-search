@@ -6,9 +6,6 @@ import com.yogecode.federatedsearch.connector.spi.QueryExecutionResult;
 import com.yogecode.federatedsearch.connector.spi.SourceConnector;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-import java.util.Map;
-
 @Component
 public class PostgresConnector implements SourceConnector {
 
@@ -19,11 +16,6 @@ public class PostgresConnector implements SourceConnector {
 
     @Override
     public QueryExecutionResult execute(QueryExecutionRequest request) {
-        return new QueryExecutionResult(request.entity().entityCode(), List.of(Map.of(
-                "sourceType", "POSTGRESQL",
-                "objectName", request.entity().objectName(),
-                "message", "Query execution not implemented yet"
-        )));
+        throw new IllegalArgumentException("PostgreSQL query execution is not implemented yet for entity: " + request.entity().entityCode());
     }
 }
-

@@ -3,7 +3,6 @@ package com.yogecode.federatedsearch.search.service;
 import com.yogecode.federatedsearch.api.search.SearchFilterRequest;
 import com.yogecode.federatedsearch.api.search.SearchRequest;
 import com.yogecode.federatedsearch.api.search.SearchResponse;
-import com.yogecode.federatedsearch.audit.service.SearchAuditService;
 import com.yogecode.federatedsearch.cache.model.SearchMetadataContext;
 import com.yogecode.federatedsearch.cache.service.SearchMetadataContextService;
 import com.yogecode.federatedsearch.common.enums.DatabaseType;
@@ -41,12 +40,11 @@ class DefaultFederatedSearchServiceTest {
     private final SearchPlanBuilder searchPlanBuilder = mock(SearchPlanBuilder.class);
     private final SearchMetadataContextService contextService = mock(SearchMetadataContextService.class);
     private final ConnectorRegistry connectorRegistry = mock(ConnectorRegistry.class);
-    private final SearchAuditService auditService = mock(SearchAuditService.class);
 
     private final SearchProperties searchProperties = new SearchProperties();
 
     private final DefaultFederatedSearchService service =
-            new DefaultFederatedSearchService(searchPlanBuilder, contextService, connectorRegistry, searchProperties, auditService);
+            new DefaultFederatedSearchService(searchPlanBuilder, contextService, connectorRegistry, searchProperties);
 
     @AfterEach
     void tearDown() {

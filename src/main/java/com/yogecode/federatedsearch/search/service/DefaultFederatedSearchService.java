@@ -4,7 +4,6 @@ import com.yogecode.federatedsearch.api.search.PartialFailureResponse;
 import com.yogecode.federatedsearch.api.search.SearchFilterRequest;
 import com.yogecode.federatedsearch.api.search.SearchRequest;
 import com.yogecode.federatedsearch.api.search.SearchResponse;
-import com.yogecode.federatedsearch.audit.service.SearchAuditService;
 import com.yogecode.federatedsearch.cache.model.SearchMetadataContext;
 import com.yogecode.federatedsearch.cache.service.SearchMetadataContextService;
 import com.yogecode.federatedsearch.common.enums.FilterOperator;
@@ -46,26 +45,22 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
     private final SearchMetadataContextService searchMetadataContextService;
     private final ConnectorRegistry connectorRegistry;
     private final SearchProperties searchProperties;
-    private final SearchAuditService searchAuditService;
 
     public DefaultFederatedSearchService(
             SearchPlanBuilder searchPlanBuilder,
             SearchMetadataContextService searchMetadataContextService,
             ConnectorRegistry connectorRegistry,
-            SearchProperties searchProperties,
-            SearchAuditService searchAuditService
+            SearchProperties searchProperties
     ) {
         this.searchPlanBuilder = searchPlanBuilder;
         this.searchMetadataContextService = searchMetadataContextService;
         this.connectorRegistry = connectorRegistry;
         this.searchProperties = searchProperties;
-        this.searchAuditService = searchAuditService;
         this.relationExecutor = Executors.newFixedThreadPool(searchProperties.getRelationExecutorThreads());
     }
 
     @Override
     public SearchResponse search(SearchRequest request) {
-        long startTime = System.currentTimeMillis();
         SearchPlan plan = searchPlanBuilder.build(request);
         SearchMetadataContext context = searchMetadataContextService.getContext(plan.rootEntityCode());
 
@@ -101,8 +96,6 @@ public class DefaultFederatedSearchService implements FederatedSearchService {
                 outcome.results(),
                 List.<PartialFailureResponse>of()
         );
-
-        searchAuditService.record(request, response, System.currentTimeMillis() - startTime);
 
         return response;
     }
